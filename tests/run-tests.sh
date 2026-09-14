@@ -523,6 +523,60 @@ t 'an unrecognised error is shown raw rather than guessed at'
 out=$(explain list 'api error SomethingNobodyHasSeenBefore: wat')
 assert_contains "$out" 'SomethingNobodyHasSeenBefore'
 
+t 'the AWS error code is shown, not buried behind RequestID and HostID'
+# The real failure that prompted this: the api error code sits at the END of
+# the line, so truncating the front 160 characters dropped the one token that
+# named the fault and made a correct diagnosis look like a wrong guess.
+long_err='2026/09/14 15:12:06 ERROR : error listing: operation error S3: ListObjectsV2, https response error StatusCode: 403, RequestID: A6E7CTTKTA83DD2XQQQQQQQQ, HostID: l16NWzuLONGLONGLONGLONGLONGLONGLONGLONGLONGLONGLONG=, api error SignatureDoesNotMatch: The request signature we calculated does not match the signature you provided'
+out=$(explain list "$long_err")
+assert_contains "$out" 'AWS said: api error SignatureDoesNotMatch'
+
+t 'and the noisy ids are not what gets shown'
+assert_not_contains "$out" 'A6E7CTTKTA83DD2XQQQQQQQQ'
+
+t 'credential shape: a short secret is caught without touching the network'
+shape() {
+	(cd "$HOME_DIR" && dash -c '
+		NASBAK_HOME="'"$HOME_DIR"'"
+		. ./lib/common.sh; . ./lib/config.sh; . ./lib/rclone.sh
+		. ./lib/jobs.sh; . ./lib/cmd_setup.sh
+		NB_COLOUR=never
+		config_load
+		AWS_ACCESS_KEY_ID='"$1"'
+		AWS_SECRET_ACCESS_KEY='"$2"'
+		check_credential_shape
+	' 2>&1)
+}
+ID20='AKIAIOSFODNN7EXAMPLE'
+SEC40='wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY12'
+out=$(shape "$ID20" 'tooshort')
+assert_contains "$out" 'is 8 characters; AWS secrets are exactly 40'
+
+t 'a short secret says the paste was cut short'
+assert_contains "$out" 'cut short'
+
+t 'a padded secret is distinguished from a truncated one'
+out=$(shape "$ID20" "${SEC40}x")
+assert_contains "$out" 'something extra came with it'
+
+t 'a wrong-length key id is caught'
+out=$(shape 'AKIASHORT' "$SEC40")
+assert_contains "$out" 'AWS key ids are 20'
+
+t 'punctuation left in the key id is called out specifically'
+out=$(shape 'AKIA-OSFODNN7EXAMPL' "$SEC40")
+assert_contains "$out" 'stray quote, space or newline'
+
+t 'correctly shaped credentials pass quietly'
+out=$(shape "$ID20" "$SEC40")
+assert_contains "$out" 'both the right shape'
+
+t 'the shape check does not fire for non-AWS providers'
+echo 'S3_PROVIDER=Wasabi' >> "$HOME_DIR/config/nasbak.conf"
+out=$(shape 'short' 'alsoshort')
+assert_not_contains "$out" 'AWS secrets are exactly 40'
+sed -i '/^S3_PROVIDER=Wasabi/d' "$HOME_DIR/config/nasbak.conf"
+
 t 'check probes listing before it tries to write'
 if grep -q 'argv_add lsd' "$REPO/lib/cmd_setup.sh"; then pass; else
 	fail "no list probe; a write failure cannot be told from an access failure"; fi

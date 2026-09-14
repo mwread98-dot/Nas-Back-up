@@ -505,7 +505,64 @@ s3_explain() {
 		return 0
 		;;
 	esac
-	error "  (raw error: $(printf '%s' "$_se_txt" | tr '\n' ' ' | sed 's/  */ /g' | cut -c1-160))"
+	s3_show_raw "$_se_txt"
+	return 0
+}
+
+# AWS puts the useful part -- "api error <Code>: <message>" -- at the END of the
+# line, behind a RequestID and a HostID that are ~60 characters of noise each.
+# A naive truncation drops exactly the token that names the fault, which makes a
+# correct diagnosis look like a wrong guess. Lead with the code.
+s3_show_raw() {
+	_ssr_api=$(printf '%s' "$1" | tr '\n' ' ' |
+		sed -n 's/.*\(api error [A-Za-z0-9]*: [^,]*\).*/\1/p' | head -n 1)
+	if [ -n "$_ssr_api" ]; then
+		error "  AWS said: $(printf '%s' "$_ssr_api" | cut -c1-150)"
+	else
+		error "  (raw error: $(printf '%s' "$1" | tr '\n' ' ' | sed 's/  */ /g' | cut -c1-200))"
+	fi
+	return 0
+}
+
+# A truncated or padded paste is the commonest cause of SignatureDoesNotMatch,
+# and it costs nothing to catch offline: AWS access key ids are 20 characters
+# and secret keys are exactly 40. Only checked for real AWS, since other
+# S3-compatible providers use their own formats.
+check_credential_shape() {
+	[ "$S3_PROVIDER" = AWS ] || return 0
+	_ccs_bad=0
+
+	_ccs_id=${AWS_ACCESS_KEY_ID:-}
+	_ccs_idlen=${#_ccs_id}
+	case "$_ccs_id" in
+	*[!A-Z0-9]*)
+		error "credentials: AWS_ACCESS_KEY_ID has characters a key id never contains."
+		error "  a stray quote, space or newline from the paste is the usual reason."
+		_ccs_bad=1
+		;;
+	esac
+	if [ "$_ccs_bad" -eq 0 ] && [ "$_ccs_idlen" -ne 20 ]; then
+		error "credentials: AWS_ACCESS_KEY_ID is $_ccs_idlen characters; AWS key ids are 20."
+		_ccs_bad=1
+	fi
+
+	_ccs_seclen=${#AWS_SECRET_ACCESS_KEY}
+	if [ "$_ccs_seclen" -ne 40 ]; then
+		error "credentials: AWS_SECRET_ACCESS_KEY is $_ccs_seclen characters; AWS secrets are exactly 40."
+		if [ "$_ccs_seclen" -lt 40 ]; then
+			error "  the paste was cut short. Copy it again from the stack's Outputs tab."
+		else
+			error "  something extra came with it -- a trailing space, quote or newline."
+		fi
+		_ccs_bad=1
+	fi
+
+	if [ "$_ccs_bad" -ne 0 ]; then
+		error "  re-enter both with:"
+		error "    nasbak init --force --bucket $S3_BUCKET --region $S3_REGION --access-key YOUR-KEY-ID --secret-key-stdin"
+		return 1
+	fi
+	ok "credentials: key id and secret are both the right shape"
 	return 0
 }
 
@@ -558,6 +615,9 @@ cmd_check() {
 		else
 			warn "credentials: mode $_mode -- run: chmod 600 $CONFIG_DIR/credentials"
 			_warn=$((_warn + 1))
+		fi
+		if ! check_credential_shape; then
+			_fail=$((_fail + 1))
 		fi
 	elif [ "$S3_ENV_AUTH" = true ]; then
 		ok "credentials: S3_ENV_AUTH=true (environment or instance role)"
