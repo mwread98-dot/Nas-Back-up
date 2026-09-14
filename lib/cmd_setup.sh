@@ -59,6 +59,14 @@ cmd_init() {
 		IFS= read -r _sk || die "no secret key on stdin"
 	fi
 
+	# A silently-defaulted region is a trap: the bucket lives in exactly one
+	# region, and getting it wrong surfaces much later as an opaque auth
+	# failure rather than "wrong region".
+	if [ -z "$_region" ]; then
+		warn "no --region given, so this config says us-east-1."
+		warn "If your bucket is anywhere else, re-run with:"
+		warn "  nasbak init --force --bucket $_bucket --region YOUR-REGION --access-key ... --secret-key-stdin"
+	fi
 	_region=$(default_to "$_region" us-east-1)
 	_class=$(default_to "$_class" GLACIER_IR)
 	_small=$(default_to "$_small" STANDARD)

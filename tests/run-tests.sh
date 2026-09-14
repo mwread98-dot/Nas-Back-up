@@ -98,6 +98,17 @@ assert_fails $?
 t 'default excludes are installed'
 assert_contains "$(cat "$HOME_DIR/config/excludes.conf")" '.systemfile/**'
 
+t 'init says so when the region defaults rather than defaulting silently'
+out=$(nasbak init --force --bucket b --access-key A --secret-key B 2>&1)
+assert_contains "$out" 'no --region given'
+
+t 'and it tells you exactly how to correct it'
+assert_contains "$out" 'init --force'
+
+t 'a region given explicitly draws no warning'
+out=$(nasbak init --force --bucket b --region eu-west-2 --access-key A --secret-key B 2>&1)
+assert_not_contains "$out" 'no --region given'
+
 t 'an invalid storage class is rejected'
 out=$(nasbak init --force --bucket b --class NONSENSE 2>&1)
 assert_fails $?
