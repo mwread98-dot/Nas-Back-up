@@ -472,6 +472,61 @@ t 'an unknown option to backup exits non-zero'
 out=$(nasbak backup --frobnicate 2>&1)
 assert_fails $?
 
+# --------------------------------------------------------------- diagnostics
+
+printf '\nS3 error diagnosis\n'
+
+# A bare "403 Forbidden" is true and useless. Each AWS error code maps to
+# exactly one likely cause; check that the right one comes out.
+explain() {
+	printf '%s' "$2" > "$TMP/err.txt"
+	(cd "$HOME_DIR" && dash -c '
+		NASBAK_HOME="'"$HOME_DIR"'"
+		. ./lib/common.sh; . ./lib/config.sh; . ./lib/rclone.sh
+		. ./lib/jobs.sh; . ./lib/cmd_setup.sh
+		NB_COLOUR=never
+		config_load
+		s3_explain "'"$TMP"'/err.txt" '"$1"'
+	' 2>&1)
+}
+
+t 'an unrecognised key id is named as such'
+assert_contains "$(explain list 'api error InvalidAccessKeyId: The AWS Access Key Id you provided does not exist')" 'does not recognise this access key id'
+
+t 'a bad secret is distinguished from a bad key id'
+assert_contains "$(explain list 'api error SignatureDoesNotMatch: signature we calculated does not match')" 'secret access key does not match'
+
+t 'clock skew is identified and the fix given'
+assert_contains "$(explain list 'api error RequestTimeTooSkewed: The difference between the request time')" 'ntpd'
+
+t 'a wrong region is not mistaken for a permissions problem'
+assert_contains "$(explain list 'api error PermanentRedirect: The bucket is in this region: us-east-1')" 'the bucket is not in eu-west-2'
+
+t 'a missing bucket is named'
+assert_contains "$(explain list 'api error NoSuchBucket: The specified bucket does not exist')" 'no bucket called'
+
+t 'a 403 on listing points at the IAM policy bucket name'
+out=$(explain list 'https response error StatusCode: 403, api error Forbidden: Forbidden')
+assert_contains "$out" 'does not cover this bucket'
+
+t 'and it explains the deployed-twice case that causes it'
+assert_contains "$out" 'deployed the stack more than once'
+
+t 'a 403 on writing points somewhere different from a 403 on listing'
+out=$(explain write 'https response error StatusCode: 403, api error Forbidden: Forbidden')
+assert_contains "$out" 's3:PutObject'
+
+t 'and it flags the missing /* suffix, which lists fine and writes nothing'
+assert_contains "$out" 'note the /* on the end'
+
+t 'an unrecognised error is shown raw rather than guessed at'
+out=$(explain list 'api error SomethingNobodyHasSeenBefore: wat')
+assert_contains "$out" 'SomethingNobodyHasSeenBefore'
+
+t 'check probes listing before it tries to write'
+if grep -q 'argv_add lsd' "$REPO/lib/cmd_setup.sh"; then pass; else
+	fail "no list probe; a write failure cannot be told from an access failure"; fi
+
 # ------------------------------------------------------------------ retention
 
 printf '\nretention policy\n'

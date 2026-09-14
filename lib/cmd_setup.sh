@@ -448,6 +448,67 @@ cron_status() {
 	fi
 }
 
+
+# Turn an rclone/AWS error dump into a plain-English cause. $1 is a file of
+# captured stderr, $2 is "list" or "write" (which probe failed).
+s3_explain() {
+	_se_file=$1
+	_se_stage=$2
+	_se_txt=$(cat "$_se_file" 2>/dev/null)
+
+	case "$_se_txt" in
+	*InvalidAccessKeyId*)
+		error "  cause: AWS does not recognise this access key id."
+		error "  check: AWS_ACCESS_KEY_ID in $CONFIG_DIR/credentials against the"
+		error "         AccessKeyId output of your CloudFormation stack."
+		;;
+	*SignatureDoesNotMatch*)
+		error "  cause: the secret access key does not match the access key id."
+		error "  check: re-enter it. Trailing spaces and a truncated paste both do this:"
+		error "         nasbak init --force --bucket $S3_BUCKET --region $S3_REGION --access-key ... --secret-key-stdin"
+		;;
+	*RequestTimeTooSkewed* | *"clock"*)
+		error "  cause: the NAS clock is more than 15 minutes out and AWS rejects the signature."
+		error "  check: run 'date'. Fix with 'ntpd -q -p pool.ntp.org'."
+		;;
+	*PermanentRedirect* | *"301"* | *AuthorizationHeaderMalformed*)
+		error "  cause: the bucket is not in $S3_REGION."
+		error "  check: the Region output of your CloudFormation stack, then:"
+		error "         nasbak init --force --bucket $S3_BUCKET --region THE-RIGHT-ONE --access-key ... --secret-key-stdin"
+		;;
+	*NoSuchBucket*)
+		error "  cause: no bucket called '$S3_BUCKET' exists in this account."
+		error "  check: the Bucket output of your CloudFormation stack. Names are exact."
+		;;
+	*403* | *Forbidden* | *AccessDenied*)
+		if [ "$_se_stage" = list ]; then
+			error "  cause: the key is valid, but its IAM policy does not cover this bucket."
+			error "         The usual reason is a policy naming a DIFFERENT bucket -- which"
+			error "         happens if you deployed the stack more than once, or renamed the"
+			error "         bucket, and kept a key from the earlier attempt."
+			error "  check: AWS Console -> IAM -> Users -> your nasbak user -> Permissions."
+			error "         Open the nasbak-s3-access policy and read the Resource lines."
+			error "         They must say arn:aws:s3:::$S3_BUCKET and arn:aws:s3:::$S3_BUCKET/*"
+			error "         If they name another bucket, take the AccessKeyId and"
+			error "         SecretAccessKey from the CloudFormation stack that owns THIS bucket."
+		else
+			error "  cause: the key can see the bucket but is denied writes."
+			error "  check: the nasbak-s3-access policy grants s3:PutObject on"
+			error "         arn:aws:s3:::$S3_BUCKET/* -- note the /* on the end. A policy with"
+			error "         only the bare bucket ARN lists fine and writes nothing."
+			error "         Also check for an explicit Deny, or a bucket policy that blocks it."
+		fi
+		;;
+	*)
+		error "  the raw error was:"
+		sed 's/^/    /' "$_se_file" 2>/dev/null | tail -n 6 >&2
+		return 0
+		;;
+	esac
+	error "  (raw error: $(printf '%s' "$_se_txt" | tr '\n' ' ' | sed 's/  */ /g' | cut -c1-160))"
+	return 0
+}
+
 # ------------------------------------------------------------------- check ---
 
 cmd_check() {
@@ -528,23 +589,47 @@ cmd_check() {
 	info "--- S3 reachability ---"
 	if [ "$_fail" -eq 0 ] && [ -x "$RCLONE_BIN" ]; then
 		rclone_env
-		_probe="$STATE_DIR/.probe"
-		printf 'nasbak connectivity probe %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" >"$_probe"
+		_err="$STATE_DIR/.probe.err"
+
+		# Three probes in order of increasing privilege, because "403" on its
+		# own cannot tell you whether the key is wrong, the bucket name is
+		# wrong, or the key simply is not allowed to write. Knowing which of
+		# these three steps failed narrows it to one cause.
 		argv_reset
-		argv_add copyto "$_probe" "$(remote_path '_nasbak/probe.txt')"
-		argv_add --config /dev/null --stats 0 --s3-storage-class STANDARD
-		if rclone_run 2>"$STATE_DIR/.probe.err"; then
-			ok "wrote s3://$S3_BUCKET/_nasbak/probe.txt"
+		argv_add lsd "$(remote_path '')"
+		argv_add --config /dev/null --stats 0 --retries 1 --low-level-retries 1
+		if rclone_run >/dev/null 2>"$_err"; then
+			ok "the bucket is reachable and this key can list it"
+
+			_probe="$STATE_DIR/.probe"
+			printf 'nasbak connectivity probe %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" >"$_probe"
 			argv_reset
-			argv_add delete "$(remote_path '_nasbak/probe.txt')"
-			argv_add --config /dev/null --stats 0
-			rclone_run >/dev/null 2>&1 && ok "delete works too"
+			argv_add copyto "$_probe" "$(remote_path '_nasbak/probe.txt')"
+			argv_add --config /dev/null --stats 0 --s3-storage-class STANDARD
+			argv_add --retries 1 --low-level-retries 1
+			if rclone_run 2>"$_err"; then
+				ok "wrote s3://$S3_BUCKET/_nasbak/probe.txt"
+				argv_reset
+				argv_add delete "$(remote_path '_nasbak/probe.txt')"
+				argv_add --config /dev/null --stats 0
+				if rclone_run >/dev/null 2>&1; then
+					ok "delete works too"
+				else
+					warn "could not delete the probe object; mirroring needs s3:DeleteObject"
+					_warn=$((_warn + 1))
+				fi
+			else
+				error "this key can list the bucket but cannot write to it"
+				s3_explain "$_err" write
+				_fail=$((_fail + 1))
+			fi
+			rm -f "$_probe"
 		else
-			error "could not write to the bucket:"
-			sed 's/^/    /' "$STATE_DIR/.probe.err" | tail -n 6 >&2
+			error "this key cannot reach the bucket at all"
+			s3_explain "$_err" list
 			_fail=$((_fail + 1))
 		fi
-		rm -f "$_probe" "$STATE_DIR/.probe.err"
+		rm -f "$_err"
 	else
 		warn "skipped (fix the errors above first)"
 	fi
