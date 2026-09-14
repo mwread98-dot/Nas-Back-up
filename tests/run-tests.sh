@@ -469,6 +469,46 @@ for f in "$REPO"/bin/nasbak "$REPO"/lib/*.sh "$REPO"/install.sh "$REPO"/tests/ru
 done
 if [ -z "$bad" ]; then pass; else fail "does not parse:$bad"; fi
 
+t 'rclone is never unpacked in /tmp'
+# /tmp on a NAS is a small RAM disk. rclone unpacks to ~70 MB and fills it,
+# and the failure surfaces as a cryptic mid-extract "write error (disk full?)".
+if grep -nE 'TMPDIR:-/tmp|="/tmp/' "$REPO/lib/rclone.sh" >/dev/null 2>&1; then
+	fail "lib/rclone.sh still stages in /tmp:
+$(grep -nE 'TMPDIR:-/tmp|="/tmp/' "$REPO/lib/rclone.sh" | sed 's/^/     /')"
+else pass; fi
+
+t 'the installer checks for free space before unpacking'
+if grep -q '_free_kib' "$REPO/lib/rclone.sh"; then pass; else
+	fail "no free-space preflight in rclone_install"; fi
+
+t '_free_kib reports a plausible figure'
+free=$(cd "$REPO" && dash -c '. ./lib/common.sh; . ./lib/rclone.sh; _free_kib "$PWD"')
+case "$free" in
+	'' ) fail "returned nothing (df unavailable is tolerated, but not here)" ;;
+	*[!0-9]* ) fail "returned non-numeric: '$free'" ;;
+	* ) if [ "$free" -gt 0 ]; then pass; else fail "returned $free"; fi ;;
+esac
+
+t '_free_kib stays quiet rather than erroring on a bad path'
+out=$(cd "$REPO" && dash -c '. ./lib/common.sh; . ./lib/rclone.sh; _free_kib /no/such/path' 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ]; then pass; else fail "exited $rc with: $out"; fi
+
+t 'no unzip call can stall waiting for a y/n prompt'
+# A run started by cron has nobody to answer "Continue? (y/n)" and would hang
+# until the next reboot.
+bad=''
+while IFS= read -r line; do
+	case "$line" in
+	*'</dev/null'*) : ;;
+	*) bad="$bad
+     $line" ;;
+	esac
+done <<UNZIPEOF
+$(grep -nE '^[[:space:]]*(\(cd [^)]*&& )?(busybox )?unzip |python3 -m zipfile|bsdtar -xf' "$REPO/lib/rclone.sh")
+UNZIPEOF
+if [ -z "$bad" ]; then pass; else fail "extract calls with stdin still attached:$bad"; fi
+
 t 'helper functions do not reuse bare temp names'
 # POSIX sh has no variable scoping. A helper that assigns a bare name like
 # _mode or _f will silently overwrite the same name in whatever function

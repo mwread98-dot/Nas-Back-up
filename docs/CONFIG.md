@@ -121,6 +121,7 @@ backup with nothing to do.
 | `STATE_DIR` | `$NASBAK_HOME/state` | |
 | `LOG_DIR` | `$NASBAK_HOME/logs` | |
 | `RCLONE_BIN` | `$NASBAK_HOME/bin/rclone` | |
+| `NASBAK_TMPDIR` | beside `RCLONE_BIN` | Where `install-rclone` unpacks. Never point this at `/tmp`: on a NAS that is a small RAM disk, and rclone unpacks to about 70 MB. |
 
 ## Pricing
 

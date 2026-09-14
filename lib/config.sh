@@ -14,6 +14,10 @@ config_defaults() {
 	LOG_DIR="${LOG_DIR:-$NASBAK_HOME/logs}"
 	LOCK_DIR="${LOCK_DIR:-$NASBAK_HOME/state/lock}"
 	RCLONE_BIN="${RCLONE_BIN:-$NASBAK_HOME/bin/rclone}"
+	# Where install-rclone unpacks. Defaults to beside RCLONE_BIN, which is on
+	# the data volume; do NOT point this at /tmp, which on a NAS is a small RAM
+	# disk that rclone's ~70 MB of unpacked binary will overflow.
+	NASBAK_TMPDIR="${NASBAK_TMPDIR:-}"
 	LOG_KEEP="${LOG_KEEP:-26}"          # weekly runs -> ~6 months of logs
 	LOCK_STALE_AFTER="${LOCK_STALE_AFTER:-86400}"
 

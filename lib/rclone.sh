@@ -53,20 +53,46 @@ _fetch() {
 
 _unzip_to() {
 	# $1 zipfile, $2 destdir. My Cloud firmwares vary in what they ship.
+	#
+	# stdin is closed on every branch. unzip prompts "replace? (y/n)" and
+	# "Continue? (y/n)" when it hits trouble, and a run started by cron has
+	# nobody to answer it -- it would hang until the next reboot.
 	if have unzip; then
-		unzip -oq "$1" -d "$2" && return 0
+		unzip -oq "$1" -d "$2" </dev/null && return 0
 	fi
 	if have busybox && busybox unzip -h >/dev/null 2>&1; then
-		(cd "$2" && busybox unzip -oq "$1") && return 0
+		(cd "$2" && busybox unzip -oq "$1" </dev/null) && return 0
 	fi
 	if have python3; then
-		python3 -m zipfile -e "$1" "$2" && return 0
+		python3 -m zipfile -e "$1" "$2" </dev/null && return 0
 	fi
 	if have bsdtar; then
-		bsdtar -xf "$1" -C "$2" && return 0
+		bsdtar -xf "$1" -C "$2" </dev/null && return 0
 	fi
 	error "no usable unzip. Install unzip, or download rclone by hand and set RCLONE_BIN."
 	return 1
+}
+
+# Free space in KiB on the filesystem holding $1. Prints nothing when it cannot
+# tell, and callers treat "unknown" as "carry on" -- a missing df must never be
+# the reason an install refuses to run.
+#
+# $(NF-2) is the Available column in both POSIX `df -Pk` output and the wrapped
+# two-line form GNU df uses for long device names, and END takes the last line
+# so the wrap is handled either way.
+_free_kib() {
+	for _fk_opt in -Pk -k; do
+		_fk_out=$(df "$_fk_opt" "$1" 2>/dev/null |
+			awk 'END { if (NF >= 4) print $(NF - 2) }')
+		case "$_fk_out" in
+		'' | *[!0-9]*) continue ;;
+		*)
+			printf '%s' "$_fk_out"
+			return 0
+			;;
+		esac
+	done
+	return 0
 }
 
 _sha256() {
@@ -84,10 +110,34 @@ _sha256() {
 rclone_install() {
 	_ri_dest=${1:-$RCLONE_BIN}
 	_ri_arch=$(rclone_arch) || return 1
-	_ri_tmp="${TMPDIR:-/tmp}/nasbak-rclone.$$"
-	mkdir -p "$_ri_tmp" || return 1
+
+	_ri_bindir=$(dirname "$_ri_dest")
+	mkdir -p "$_ri_bindir" || {
+		error "cannot create $_ri_bindir"
+		return 1
+	}
+
+	# Stage beside the destination, NOT in /tmp. On a My Cloud (and most NAS
+	# firmware) /tmp is a small RAM disk, while rclone's archive unpacks to
+	# around 70 MB -- so /tmp fills up partway through and unzip dies with
+	# "write error (disk full?)". Staging here also makes the final install an
+	# atomic rename instead of a copy across filesystems.
+	_ri_tmp="${NASBAK_TMPDIR:-$_ri_bindir}/.nasbak-rclone.$$"
+	mkdir -p "$_ri_tmp" || {
+		error "cannot create the staging directory $_ri_tmp"
+		return 1
+	}
 	# shellcheck disable=SC2064
 	trap "rm -rf '$_ri_tmp'" EXIT
+
+	# Say so up front rather than failing halfway through the extract.
+	_ri_free=$(_free_kib "$_ri_tmp")
+	if [ -n "$_ri_free" ] && [ "$_ri_free" -lt 153600 ]; then
+		error "only $((_ri_free / 1024)) MB free where rclone would be unpacked ($_ri_tmp)"
+		error "it needs about 150 MB. Free some space, or set NASBAK_TMPDIR to a"
+		error "directory on a volume that has room and run this again."
+		return 1
+	fi
 
 	info "resolving latest rclone version"
 	_ri_ver=$(_fetch 'https://downloads.rclone.org/version.txt' - | awk '{print $2}' | tr -d '\r')

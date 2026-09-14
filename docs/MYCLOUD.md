@@ -155,6 +155,16 @@ If the share really is fine and you deleted the canary by accident:
 nasbak canary photos
 ```
 
+**`write error (disk full?)` while installing rclone.** Fixed in current versions,
+which unpack on the data volume. If you are on an older copy, `/tmp` is a RAM disk of
+a couple of hundred MB and rclone needs about 150 MB of it:
+
+```sh
+rm -rf /tmp/nasbak-rclone.*
+export NASBAK_TMPDIR=/mnt/HD/HD_a2/nasbak/bin
+nasbak install-rclone
+```
+
 **"Another nasbak run is active".** The previous weekly run has not finished — normal
 during the initial seed. If nothing is really running:
 
