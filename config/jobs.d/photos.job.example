@@ -1,0 +1,27 @@
+# A backup set. One file per set in config/jobs.d/, named NAME.job.
+# Anything left unset is inherited from config/nasbak.conf.
+#
+# Create these with:  nasbak add-job photos --source /mnt/HD/HD_a2/Photos
+
+SOURCE=/mnt/HD/HD_a2/Photos
+ENABLED=true
+
+# Where it lands in the bucket. Defaults to the job name.
+DEST_PREFIX=photos
+DESCRIPTION="Family photos and video"
+
+# Cold bulk that never changes: DEEP_ARCHIVE is 4x cheaper than GLACIER_IR.
+# The catch is a 180-day minimum billing duration per object, so only point it
+# at data that genuinely does not change -- see docs/COSTS.md section 2.
+STORAGE_CLASS=DEEP_ARCHIVE
+SMALL_FILE_CLASS=STANDARD
+SMALL_FILE_THRESHOLD=10k
+
+# Extra rclone filter rules for this set only, on top of config/excludes.conf.
+#EXCLUDES=/mnt/HD/HD_a2/nasbak/config/jobs.d/photos.filter
+
+# Tighter than the global default: a photo archive should never lose 5% of
+# itself in a week.
+MAX_DELETE_PCT=2
+
+#BWLIMIT=2M

@@ -1,0 +1,232 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  nasbak: S3 destination for a weekly NAS mirror. Creates a versioned,
+  encrypted, private bucket with cost-safety lifecycle rules, a least-privilege
+  IAM user for the NAS, and an optional monthly budget alarm.
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: Globally unique bucket name, e.g. smith-nas-backup-7f3a.
+    AllowedPattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+    ConstraintDescription: 3-63 chars, lowercase letters, digits, dots and hyphens.
+
+  RetentionDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    MaxValue: 3650
+    Description: >-
+      How long a superseded or deleted file stays recoverable. This is the undo
+      window, not a second copy: only changed files consume it. NOTE: archive
+      classes bill a minimum duration (GLACIER_IR/GLACIER 90 days,
+      DEEP_ARCHIVE 180). Expiring sooner than that still bills the remainder,
+      so match this to the class you upload in.
+
+  KeepVersions:
+    Type: Number
+    Default: 3
+    MinValue: 0
+    MaxValue: 100
+    Description: >-
+      Always keep at least this many superseded versions per file, even once
+      they are older than RetentionDays. 0 disables the floor.
+
+  NotificationEmail:
+    Type: String
+    Default: ''
+    Description: Optional. Email address for the monthly S3 budget alert.
+
+  MonthlyBudgetUSD:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    Description: Alert when forecast or actual monthly S3 spend passes this.
+
+Conditions:
+  HasEmail: !Not [!Equals [!Ref NotificationEmail, '']]
+  KeepsVersions: !Not [!Equals [!Ref KeepVersions, 0]]
+
+Resources:
+
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref BucketName
+      # Versioning is what replaces the stock My Cloud app's monthly full
+      # copy. One live object per file, plus superseded versions that
+      # lifecycle expires on a schedule.
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          # SSE-S3 (AES256) is free. SSE-KMS bills per request, which a
+          # backup with hundreds of thousands of objects feels immediately.
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          # Orphaned multipart parts are invisible in the console and billed
+          # forever. This is the single most commonly missed S3 cost leak.
+          - Id: abort-incomplete-multipart-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+          - Id: expire-superseded-versions
+            Status: Enabled
+            NoncurrentVersionExpiration: !If
+              - KeepsVersions
+              - NoncurrentDays: !Ref RetentionDays
+                NewerNoncurrentVersions: !Ref KeepVersions
+              - NoncurrentDays: !Ref RetentionDays
+
+          # A deleted file leaves a delete marker behind. They cost nothing to
+          # store but they are returned by LIST, and every weekly sync pays to
+          # list them.
+          - Id: clean-expired-delete-markers
+            Status: Enabled
+            ExpiredObjectDeleteMarker: true
+
+          - Id: expire-run-reports
+            Status: Enabled
+            Prefix: _nasbak/
+            ExpirationInDays: 400
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+
+  # Deny anything that is not TLS. Belt and braces next to the IAM policy.
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BackupBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyUnencryptedTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt BackupBucket.Arn
+              - !Sub '${BackupBucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+
+  BackupUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub '${AWS::StackName}-nas'
+      Policies:
+        - PolicyName: nasbak-s3-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ListTheBucket
+                Effect: Allow
+                Action:
+                  - 's3:ListBucket'
+                  - 's3:ListBucketVersions'
+                  - 's3:ListBucketMultipartUploads'
+                  - 's3:GetBucketLocation'
+                Resource: !GetAtt BackupBucket.Arn
+
+              - Sid: ReadWriteObjects
+                Effect: Allow
+                Action:
+                  - 's3:PutObject'
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:DeleteObject'
+                  - 's3:RestoreObject'
+                  - 's3:AbortMultipartUpload'
+                  - 's3:ListMultipartUploadParts'
+                Resource: !Sub '${BackupBucket.Arn}/*'
+
+              # The NAS can mirror deletions (which only create delete markers)
+              # but it cannot purge history or relax the bucket's protections.
+              # If the NAS is ever compromised, the version history survives.
+              - Sid: NasMayNotDestroyHistory
+                Effect: Deny
+                Action:
+                  - 's3:DeleteObjectVersion'
+                  - 's3:DeleteObjectVersionTagging'
+                  - 's3:PutBucketVersioning'
+                  - 's3:PutLifecycleConfiguration'
+                  - 's3:PutBucketPolicy'
+                  - 's3:PutBucketAcl'
+                  - 's3:PutBucketPublicAccessBlock'
+                  - 's3:DeleteBucket'
+                  - 's3:DeleteBucketPolicy'
+                Resource:
+                  - !GetAtt BackupBucket.Arn
+                  - !Sub '${BackupBucket.Arn}/*'
+
+  BackupUserKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref BackupUser
+
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Condition: HasEmail
+    Properties:
+      Budget:
+        BudgetName: !Sub '${AWS::StackName}-s3-monthly'
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUSD
+          Unit: USD
+        CostFilters:
+          Service:
+            - Amazon Simple Storage Service
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
+
+Outputs:
+  Bucket:
+    Description: Put this in S3_BUCKET.
+    Value: !Ref BackupBucket
+
+  Region:
+    Description: Put this in S3_REGION.
+    Value: !Ref 'AWS::Region'
+
+  AccessKeyId:
+    Description: Put this in AWS_ACCESS_KEY_ID (config/credentials).
+    Value: !Ref BackupUserKey
+
+  SecretAccessKey:
+    Description: >-
+      Put this in AWS_SECRET_ACCESS_KEY (config/credentials). Anyone with
+      CloudFormation read access on this stack can see it here. Copy it to the
+      NAS, then either delete this stack output or rotate the key.
+    Value: !GetAtt BackupUserKey.SecretAccessKey

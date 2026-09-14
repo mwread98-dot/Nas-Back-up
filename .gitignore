@@ -1,0 +1,13 @@
+# Never commit a live install. install.sh creates these under the install
+# prefix, but people do clone straight into the install directory.
+config/nasbak.conf
+config/credentials
+config/excludes.conf
+config/jobs.d/*.job
+config/jobs.d/*.filter
+state/
+logs/
+bin/rclone
+
+*.log
+.DS_Store

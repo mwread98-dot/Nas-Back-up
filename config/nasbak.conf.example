@@ -1,0 +1,86 @@
+# ---------------------------------------------------------------------------
+# nasbak configuration -- annotated example.
+#
+# The real file lives at <install dir>/config/nasbak.conf and is normally
+# written by "nasbak init". This copy documents every setting; see
+# docs/CONFIG.md for the full reference and docs/COSTS.md for the reasoning.
+#
+# The S3 secret key does NOT go here. It goes in config/credentials, mode 600.
+# ---------------------------------------------------------------------------
+
+# --- destination -----------------------------------------------------------
+S3_BUCKET=your-nas-backup-7f3a
+S3_REGION=eu-west-2
+
+# SSE-S3 is free. SSE-KMS bills per request and per key, which a backup with
+# hundreds of thousands of objects feels immediately.
+SSE=AES256
+
+# For a non-AWS S3-compatible store (Wasabi, Backblaze B2, MinIO). The
+# storage-class logic below is AWS-specific and mostly stops applying.
+#S3_ENDPOINT=https://s3.eu-central-1.wasabisys.com
+#S3_PROVIDER=Wasabi
+
+# --- storage class ---------------------------------------------------------
+# Files at or above SMALL_FILE_THRESHOLD go to STORAGE_CLASS; smaller ones go
+# to SMALL_FILE_CLASS. Archive tiers bill a minimum of 128 KiB per object, so
+# tiny files genuinely are cheaper in STANDARD.
+#
+# Run "nasbak estimate" to get the right threshold for your own files -- it is
+# about 22 KiB against GLACIER_IR and about 10 KiB against DEEP_ARCHIVE, but
+# the saving depends entirely on how many small files you have.
+#
+# Set SMALL_FILE_CLASS equal to STORAGE_CLASS to turn the split off.
+STORAGE_CLASS=GLACIER_IR
+SMALL_FILE_CLASS=STANDARD
+SMALL_FILE_THRESHOLD=24k
+
+# --- version history -------------------------------------------------------
+# How long a superseded or deleted file stays recoverable. Only CHANGED files
+# consume this -- it is an undo window, not a second copy.
+#
+# Keep it at or above the class minimum (GLACIER_IR and GLACIER 90 days,
+# DEEP_ARCHIVE 180) or every expired version is billed to that minimum anyway.
+VERSION_RETENTION_DAYS=90
+KEEP_VERSIONS=3
+
+# --- comparison ------------------------------------------------------------
+# server-modtime keeps the weekly run to LIST requests only. The alternative,
+# rclone's stock "modtime", issues one HEAD per object per run -- around
+# $84/year at 160,000 objects on GLACIER_IR. See docs/COSTS.md section 4.
+COMPARE_MODE=server-modtime
+
+# --- safety ----------------------------------------------------------------
+# A mirror propagates deletions, which is what you want right up until a share
+# fails to remount and looks like an empty directory.
+MAX_DELETE_PCT=5
+REQUIRE_CANARY=true
+
+# --- throughput (defaults sized for a 1 GB-RAM dual-core ARM NAS) ----------
+# Peak upload memory is TRANSFERS x S3_UPLOAD_CONCURRENCY x S3_CHUNK_SIZE.
+# These come to 64 MiB. 16 MiB chunks also raise the max file size to 160 GB
+# (S3 allows 10,000 parts); the 5 MiB default would cap it at 48 GB.
+TRANSFERS=2
+CHECKERS=8
+S3_CHUNK_SIZE=16M
+S3_UPLOAD_CONCURRENCY=2
+BUFFER_SIZE=4M
+
+# Cap upload bandwidth, or schedule it.
+#BWLIMIT=5M
+#BWLIMIT="08:00,1M 23:00,off"
+
+# --- reporting -------------------------------------------------------------
+# Set this. A backup that silently stopped running looks exactly like a backup
+# with nothing to do, and nothing else will tell you the difference.
+#HEALTHCHECK_URL=https://hc-ping.com/YOUR-UUID-HERE
+
+#NOTIFY_URL=https://ntfy.sh/your-private-topic
+#NOTIFY_FORMAT=text
+NOTIFY_ON=fail
+
+# --- pricing ---------------------------------------------------------------
+# US East (N. Virginia) list prices. Used only by "nasbak estimate" and the
+# cost line in "nasbak status". Set them for your region.
+#PRICE_GB_GLACIER_IR=0.0045   # eu-west-2
+#PRICE_EGRESS_GB=0.09

@@ -1,0 +1,140 @@
+#!/bin/sh
+#
+# nasbak -- weekly NAS -> S3 mirror with cost-aware storage class handling.
+#
+# Built for a WD My Cloud EX2 Ultra, but nothing here is model-specific: it is
+# POSIX sh plus rclone, so it runs on any NAS, Pi or Linux box that can see the
+# shares.
+#
+# The design in one paragraph: `rclone sync` mirrors the NAS into a versioned
+# S3 bucket, so there is exactly one live copy of each file and unchanged bytes
+# are never re-uploaded. Superseded and deleted files become noncurrent
+# versions that a lifecycle rule expires after a set number of days -- a
+# bounded undo window rather than the stock My Cloud app's fresh full copy
+# every month. Large files are PUT straight into an archive storage class;
+# files below a threshold go to STANDARD, because archive tiers bill a 128 KiB
+# minimum per object. Comparison is done from LIST metadata alone, so a weekly
+# run costs a fraction of a cent in requests no matter how many files there are.
+
+set -u
+
+NASBAK_VERSION=1.0.0
+
+# --------------------------------------------------------- locate ourselves --
+
+nb_self() {
+	_s=$0
+	# Follow symlinks so /usr/local/bin/nasbak -> .../nasbak still finds lib/.
+	_n=0
+	while [ -L "$_s" ] && [ "$_n" -lt 32 ]; do
+		_l=$(readlink "$_s" 2>/dev/null) || break
+		case "$_l" in
+		/*) _s=$_l ;;
+		*) _s="$(dirname "$_s")/$_l" ;;
+		esac
+		_n=$((_n + 1))
+	done
+	printf '%s' "$_s"
+}
+
+NB_SELF=$(nb_self)
+NB_BINDIR=$(CDPATH='' cd -P -- "$(dirname -- "$NB_SELF")" && pwd) ||
+	{ echo "nasbak: cannot locate myself" >&2; exit 1; }
+NASBAK_HOME=${NASBAK_HOME:-$(dirname -- "$NB_BINDIR")}
+export NASBAK_HOME
+
+for _lib in common config rclone jobs cmd_backup cmd_setup cmd_aws cmd_ops cmd_estimate; do
+	_p="$NASBAK_HOME/lib/$_lib.sh"
+	[ -f "$_p" ] || { echo "nasbak: missing library $_p" >&2; exit 1; }
+	# shellcheck disable=SC1090
+	. "$_p"
+done
+
+# ------------------------------------------------------------------- usage --
+
+usage() {
+	cat <<'EOF'
+nasbak -- weekly NAS to S3 mirror, with the S3 bill taken seriously.
+
+USAGE
+  nasbak <command> [options]
+
+SETTING UP
+  init                 Write the configuration.
+  install-rclone       Download and verify the rclone binary for this machine.
+  bootstrap            Print (or apply) the bucket, lifecycle and IAM setup.
+  add-job NAME         Define a backup set.
+  jobs                 List the backup sets.
+  canary NAME          (Re)write a set's mount-guard file.
+  cron <action>        install | ensure | remove | status.
+  check                Verify every part of the setup end to end.
+
+RUNNING
+  backup               Mirror the NAS to S3. This is what cron calls.
+  status               Last run, what is stored, what it costs.
+  estimate             Model the S3 bill from your real file sizes.
+  verify               Compare the NAS against S3.
+  prune                Clear incomplete multipart uploads.
+
+GETTING DATA BACK
+  versions             List stored versions of one file.
+  thaw                 Start a GLACIER / DEEP_ARCHIVE retrieval.
+  restore              Download files back to the NAS.
+
+GLOBAL OPTIONS
+  -v, --verbose        Debug logging.
+  -q, --quiet          Warnings and errors only.
+      --home DIR       Installation directory (default: alongside this script).
+      --color WHEN     always | never | auto.
+      --version        Print the version.
+  -h, --help           This text.
+
+Every command takes --help. Start with:  nasbak init --help
+EOF
+}
+
+# ---------------------------------------------------------------- dispatch --
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-v | --verbose) NB_LOGLEVEL=0; shift ;;
+	-q | --quiet) NB_LOGLEVEL=2; shift ;;
+	--home) NASBAK_HOME=$2; export NASBAK_HOME; shift 2 ;;
+	--color | --colour) NB_COLOUR=$2; shift 2 ;;
+	--version) printf 'nasbak %s\n' "$NASBAK_VERSION"; exit 0 ;;
+	-h | --help) usage; exit 0 ;;
+	--) shift; break ;;
+	-*) error "unknown global option: $1"; usage; exit 2 ;;
+	*) break ;;
+	esac
+done
+
+[ $# -ge 1 ] || { usage; exit 2; }
+
+_cmd=$1
+shift
+
+case "$_cmd" in
+init) cmd_init "$@" ;;
+install-rclone) cmd_install_rclone "$@" ;;
+bootstrap) cmd_bootstrap "$@" ;;
+add-job | addjob) cmd_add_job "$@" ;;
+jobs) cmd_jobs "$@" ;;
+canary) cmd_canary "$@" ;;
+cron) cmd_cron "$@" ;;
+check | doctor) cmd_check "$@" ;;
+backup | sync) cmd_backup "$@" ;;
+status) cmd_status "$@" ;;
+estimate | cost) cmd_estimate "$@" ;;
+verify | check-data) cmd_verify "$@" ;;
+prune | cleanup) cmd_prune "$@" ;;
+versions) cmd_versions "$@" ;;
+thaw) cmd_thaw "$@" ;;
+restore) cmd_restore "$@" ;;
+help) usage ;;
+*)
+	error "unknown command: $_cmd"
+	usage
+	exit 2
+	;;
+esac

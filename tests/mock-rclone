@@ -1,0 +1,36 @@
+#!/bin/sh
+# Mock rclone for the test suite. Records its argv and answers the handful of
+# subcommands nasbak uses.
+MOCK_DIR=${MOCK_DIR:-/tmp/nasbak-mock}
+mkdir -p "$MOCK_DIR"
+printf '%s\n' "$*" >>"$MOCK_DIR/calls.log"
+
+case "$1" in
+version)
+	echo "rclone v1.65.2"
+	echo "- os/version: test"
+	exit 0
+	;;
+size)
+	# Remote paths answer from a fixture; local paths are counted for real.
+	for a in "$@"; do
+		case "$a" in
+		nbs3:*)
+			printf '{"count":%s,"bytes":%s}\n' "${MOCK_COUNT:-1000}" "${MOCK_BYTES:-1048576000}"
+			exit 0
+			;;
+		esac
+	done
+	printf '{"count":0,"bytes":0}\n'
+	exit 0
+	;;
+lsl)
+	[ -n "${MOCK_LSL_FILE:-}" ] && cat "$MOCK_LSL_FILE"
+	exit 0
+	;;
+sync | copy | copyto | check | delete | cleanup | backend)
+	[ -n "${MOCK_FAIL:-}" ] && exit "${MOCK_FAIL}"
+	exit 0
+	;;
+esac
+exit 0

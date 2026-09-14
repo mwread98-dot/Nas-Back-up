@@ -1,0 +1,32 @@
+{
+  "Rules": [
+    {
+      "ID": "nasbak-abort-incomplete-multipart-uploads",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "" },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    },
+    {
+      "ID": "nasbak-expire-superseded-versions",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "" },
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": @@RETENTION_DAYS@@,
+        "NewerNoncurrentVersions": @@KEEP_VERSIONS@@
+      }
+    },
+    {
+      "ID": "nasbak-clean-expired-delete-markers",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "" },
+      "Expiration": { "ExpiredObjectDeleteMarker": true }
+    },
+    {
+      "ID": "nasbak-expire-run-reports",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "_nasbak/" },
+      "Expiration": { "Days": 400 },
+      "NoncurrentVersionExpiration": { "NoncurrentDays": 30 }
+    }
+  ]
+}
