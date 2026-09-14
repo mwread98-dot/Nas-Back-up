@@ -54,7 +54,7 @@ cmd_backup() {
 			return 0
 			;;
 		*)
-			error "unknown option: $1"
+			opt_error "$1" "${2:-}"
 			cmd_backup_usage
 			return 2
 			;;

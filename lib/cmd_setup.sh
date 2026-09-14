@@ -38,7 +38,7 @@ cmd_init() {
 		--retention) _retention=$2; shift 2 ;;
 		--force) _force=true; shift ;;
 		-h | --help) cmd_init_usage; return 0 ;;
-		*) error "unknown option: $1"; cmd_init_usage; return 2 ;;
+		*) opt_error "$1" "${2:-}"; cmd_init_usage; return 2 ;;
 		esac
 	done
 
@@ -249,7 +249,7 @@ cmd_add_job() {
 		--disabled) _enabled=false; shift ;;
 		--force) _force=true; shift ;;
 		-h | --help) cmd_addjob_usage; return 0 ;;
-		*) error "unknown option: $1"; cmd_addjob_usage; return 2 ;;
+		*) opt_error "$1" "${2:-}"; cmd_addjob_usage; return 2 ;;
 		esac
 	done
 
@@ -359,7 +359,7 @@ cmd_cron() {
 		--minute) _minute=$2; shift 2 ;;
 		--schedule) _schedule=$2; shift 2 ;;
 		-h | --help) cmd_cron_usage; return 0 ;;
-		*) error "unknown option: $1"; cmd_cron_usage; return 2 ;;
+		*) opt_error "$1" "${2:-}"; cmd_cron_usage; return 2 ;;
 		esac
 	done
 

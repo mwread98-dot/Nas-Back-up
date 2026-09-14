@@ -36,7 +36,7 @@ cmd_bootstrap() {
 		--bucket-policy) _what=bucketpolicy; shift ;;
 		--apply) _what=apply; shift ;;
 		-h | --help) cmd_bootstrap_usage; return 0 ;;
-		*) error "unknown option: $1"; cmd_bootstrap_usage; return 2 ;;
+		*) opt_error "$1" "${2:-}"; cmd_bootstrap_usage; return 2 ;;
 		esac
 	done
 

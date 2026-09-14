@@ -19,7 +19,7 @@ cmd_status() {
 		case "$1" in
 		--live) _live=true; shift ;;
 		-h | --help) cmd_status_usage; return 0 ;;
-		*) error "unknown option: $1"; return 2 ;;
+		*) opt_error "$1" "${2:-}"; return 2 ;;
 		esac
 	done
 
@@ -173,7 +173,7 @@ cmd_restore() {
 		-n | --dry-run) _dry=true; shift ;;
 		--yes) _yes=true; shift ;;
 		-h | --help) cmd_restore_usage; return 0 ;;
-		*) error "unknown option: $1"; cmd_restore_usage; return 2 ;;
+		*) opt_error "$1" "${2:-}"; cmd_restore_usage; return 2 ;;
 		esac
 	done
 
@@ -279,7 +279,7 @@ cmd_thaw() {
 		--days) _days=$2; shift 2 ;;
 		--status) _status=true; shift ;;
 		-h | --help) cmd_thaw_usage; return 0 ;;
-		*) error "unknown option: $1"; cmd_thaw_usage; return 2 ;;
+		*) opt_error "$1" "${2:-}"; cmd_thaw_usage; return 2 ;;
 		esac
 	done
 
@@ -356,7 +356,7 @@ cmd_verify() {
 		--deep) _mode=deep; shift ;;
 		--download) _mode=download; shift ;;
 		-h | --help) cmd_verify_usage; return 0 ;;
-		*) error "unknown option: $1"; cmd_verify_usage; return 2 ;;
+		*) opt_error "$1" "${2:-}"; cmd_verify_usage; return 2 ;;
 		esac
 	done
 
@@ -431,7 +431,7 @@ cmd_prune() {
 		case "$1" in
 		--yes) _yes=true; shift ;;
 		-h | --help) cmd_prune_usage; return 0 ;;
-		*) error "unknown option: $1"; return 2 ;;
+		*) opt_error "$1" "${2:-}"; return 2 ;;
 		esac
 	done
 
@@ -478,7 +478,7 @@ cmd_versions() {
 		-j | --job) _job=$2; shift 2 ;;
 		--path) _path=$2; shift 2 ;;
 		-h | --help) cmd_versions_usage; return 0 ;;
-		*) error "unknown option: $1"; return 2 ;;
+		*) opt_error "$1" "${2:-}"; return 2 ;;
 		esac
 	done
 

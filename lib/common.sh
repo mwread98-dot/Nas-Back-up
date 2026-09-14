@@ -209,6 +209,17 @@ file_mtime() {
 	return 0
 }
 
+# "unknown option", with a nudge for the commonest typo. Typing "-- bucket"
+# instead of "--bucket" leaves the shell handing us a bare "--" followed by the
+# option name, and a plain "unknown option: --" gives no clue what went wrong.
+opt_error() {
+	error "unknown option: $1"
+	if [ "$1" = '--' ] && [ -n "${2:-}" ]; then
+		error "it looks like you typed '-- $2' with a space; it needs to be '--$2'."
+	fi
+	return 0
+}
+
 # ------------------------------------------------------------ notifications --
 
 # Dead-man's-switch ping (healthchecks.io and compatible). $1 is '', 'start'

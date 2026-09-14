@@ -32,7 +32,7 @@ cmd_estimate() {
 		--restores) _restores=$2; shift 2 ;;
 		--no-histogram) _hist=false; shift ;;
 		-h | --help) cmd_estimate_usage; return 0 ;;
-		*) error "unknown option: $1"; cmd_estimate_usage; return 2 ;;
+		*) opt_error "$1" "${2:-}"; cmd_estimate_usage; return 2 ;;
 		esac
 	done
 

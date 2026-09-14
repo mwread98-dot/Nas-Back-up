@@ -450,6 +450,24 @@ t 'an unknown command exits non-zero'
 out=$(nasbak frobnicate 2>&1)
 assert_fails $?
 
+t 'a space after the dashes is diagnosed, not just rejected'
+# "-- bucket NAME" leaves the shell handing nasbak a bare "--", and a plain
+# "unknown option: --" gives a beginner nothing to go on.
+out=$(nasbak init --force -- bucket some-name 2>&1)
+assert_contains "$out" "typed '-- bucket'"
+
+t 'and that still exits non-zero'
+out=$(nasbak init --force -- bucket some-name 2>&1)
+assert_fails $?
+
+t 'a genuinely unknown option gets no misleading nudge'
+out=$(nasbak init --force --frobnicate 2>&1)
+assert_not_contains "$out" 'with a space'
+
+t 'the nudge works on other subcommands too'
+out=$(nasbak add-job x -- source /tmp 2>&1)
+assert_contains "$out" "typed '-- source'"
+
 t 'an unknown option to backup exits non-zero'
 out=$(nasbak backup --frobnicate 2>&1)
 assert_fails $?
