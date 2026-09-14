@@ -56,7 +56,30 @@ cmd_init() {
 	[ -n "$_small" ] && { class_is_valid "$_small" || die "invalid --small-class: $_small"; }
 
 	if [ "$_sk_stdin" = true ]; then
-		IFS= read -r _sk || die "no secret key on stdin"
+		if [ -t 0 ]; then
+			# Turn off terminal echo. Without this the secret is printed as it
+			# is typed or pasted, which puts it in scrollback and in any
+			# screenshot of this window -- defeating most of the point of
+			# reading it from stdin rather than the command line.
+			printf 'Paste the secret access key (it will not be shown), then press Enter: ' >&2
+			_stty_saved=$(stty -g 2>/dev/null) || _stty_saved=''
+			if [ -n "$_stty_saved" ]; then
+				# shellcheck disable=SC2064
+				trap "stty '$_stty_saved' 2>/dev/null; printf '\n' >&2" EXIT INT TERM
+				stty -echo 2>/dev/null || :
+			fi
+			IFS= read -r _sk
+			_read_rc=$?
+			if [ -n "$_stty_saved" ]; then
+				stty "$_stty_saved" 2>/dev/null || :
+				trap - EXIT INT TERM
+			fi
+			printf '\n' >&2
+			[ "$_read_rc" -eq 0 ] || die "no secret key given"
+		else
+			IFS= read -r _sk || die "no secret key on stdin"
+		fi
+		[ -n "$_sk" ] || die "the secret key was empty"
 	fi
 
 	# A silently-defaulted region is a trap: the bucket lives in exactly one
@@ -464,7 +487,10 @@ s3_explain() {
 		;;
 	*SignatureDoesNotMatch*)
 		error "  cause: the secret access key does not match the access key id."
-		error "  check: re-enter it. Trailing spaces and a truncated paste both do this:"
+		error "  check: the key id is fine, so it is the secret. Copy it again using the"
+		error "         console's copy button rather than selecting it by hand -- a capital O"
+		error "         read as a zero, or l as a 1, gives exactly this error and the length"
+		error "         still looks right. Then re-enter it:"
 		error "         nasbak init --force --bucket $S3_BUCKET --region $S3_REGION --access-key ... --secret-key-stdin"
 		;;
 	*RequestTimeTooSkewed* | *"clock"*)

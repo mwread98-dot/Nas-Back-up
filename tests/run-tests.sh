@@ -260,11 +260,11 @@ assert_fails $?
 mkdir -p "$SRC/sub" && printf 'z%.0s' $(seq 1 50000) >"$SRC/sub/medium.bin"
 
 t 'a failing rclone makes the run fail'
-out=$(MOCK_FAIL=1 nasbak backup --job media 2>&1)
+out=$(MOCK_SYNC_FAIL=1 nasbak backup --job media 2>&1)
 assert_fails $?
 
 t 'a failing large pass skips the small pass rather than half-syncing'
-out=$(MOCK_FAIL=1 nasbak backup --job media 2>&1)
+out=$(MOCK_SYNC_FAIL=1 nasbak backup --job media 2>&1)
 n=$(sync_calls | wc -l)
 if [ "$n" -eq 1 ]; then pass; else fail "expected 1 sync call, got $n"; fi
 
@@ -576,6 +576,47 @@ echo 'S3_PROVIDER=Wasabi' >> "$HOME_DIR/config/nasbak.conf"
 out=$(shape 'short' 'alsoshort')
 assert_not_contains "$out" 'AWS secrets are exactly 40'
 sed -i '/^S3_PROVIDER=Wasabi/d' "$HOME_DIR/config/nasbak.conf"
+
+t 'the secret is read without echoing it to the screen'
+# --secret-key-stdin exists to keep the secret out of argv and shell history.
+# Leaving terminal echo on put it in scrollback and screenshots instead, which
+# is most of the exposure back again.
+if grep -q 'stty -echo' "$REPO/lib/cmd_setup.sh"; then pass; else
+	fail "init echoes the secret while reading it"; fi
+
+t 'and terminal echo is restored even on interrupt'
+if grep -q "trap \"stty '\$_stty_saved'" "$REPO/lib/cmd_setup.sh"; then pass; else
+	fail "no trap to restore stty; a Ctrl-C would leave the terminal blind"; fi
+
+t 'an empty secret is rejected rather than written'
+out=$(printf '\n' | nasbak init --force --bucket b --region eu-west-2 --access-key A --secret-key-stdin 2>&1)
+assert_fails $?
+
+t 'a failed destination listing aborts the set instead of syncing blind'
+out=$(MOCK_FAIL=1 nasbak backup --job media 2>&1)
+assert_contains "$out" 'refusing to sync without knowing what is already stored'
+
+t 'and no sync is issued after that'
+out=$(MOCK_FAIL=1 nasbak backup --job media 2>&1)
+n=$(sync_calls | wc -l)
+if [ "$n" -eq 0 ]; then pass; else fail "$n sync call(s) ran with an unreadable destination"; fi
+
+t 'rclone_size distinguishes an empty prefix from a failed listing'
+empty=$(cd "$HOME_DIR" && MOCK_COUNT=0 MOCK_BYTES=0 dash -c '
+	NASBAK_HOME="'"$HOME_DIR"'"
+	. ./lib/common.sh; . ./lib/config.sh; . ./lib/rclone.sh
+	config_load; rclone_size nbs3:b/x; echo " rc=$?"')
+assert_contains "$empty" '0 0 rc=0'
+
+t 'and a failing listing returns non-zero'
+rc=$(cd "$HOME_DIR" && MOCK_FAIL=1 dash -c '
+	NASBAK_HOME="'"$HOME_DIR"'"
+	. ./lib/common.sh; . ./lib/config.sh; . ./lib/rclone.sh
+	config_load; rclone_size nbs3:b/x >/dev/null; echo $?')
+if [ "$rc" != 0 ]; then pass; else fail "returned 0 for a failed listing"; fi
+
+t 'the signature error names character confusion, which a length check misses'
+assert_contains "$(explain list 'api error SignatureDoesNotMatch: nope')" 'capital O'
 
 t 'check probes listing before it tries to write'
 if grep -q 'argv_add lsd' "$REPO/lib/cmd_setup.sh"; then pass; else

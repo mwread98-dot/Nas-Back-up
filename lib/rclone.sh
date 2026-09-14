@@ -316,7 +316,13 @@ rclone_size() {
 	shift
 	for _rsz_extra in "$@"; do argv_add "$_rsz_extra"; done
 	eval "set -- $NB_ARGS"
-	"$RCLONE_BIN" "$@" 2>/dev/null |
-		tr -d ' \n' |
-		sed -n 's/.*"count":\([0-9-]*\).*"bytes":\([0-9-]*\).*/\1 \2/p'
+	# Distinguish "the prefix is empty" (count 0, a normal first run) from
+	# "the listing failed" (auth, network, wrong bucket). Returning blank for
+	# both would let a caller size its delete guard against nothing and sync
+	# blind.
+	_rsz_out=$("$RCLONE_BIN" "$@" 2>/dev/null) || return 1
+	_rsz_parsed=$(printf '%s' "$_rsz_out" | tr -d ' \n' |
+		sed -n 's/.*"count":\([0-9-]*\).*"bytes":\([0-9-]*\).*/\1 \2/p')
+	[ -n "$_rsz_parsed" ] || return 1
+	printf '%s' "$_rsz_parsed"
 }

@@ -193,7 +193,13 @@ backup_one_job() {
 	# delete guard and for --fast-list sizing) and the stored bytes we report.
 	# LIST is metadata only, so this is safe and cheap even against
 	# DEEP_ARCHIVE.
-	_boj_before=$(rclone_size "$_boj_dest")
+	if ! _boj_before=$(rclone_size "$_boj_dest"); then
+		error "[$JOB_NAME] could not read the destination listing from S3."
+		error "[$JOB_NAME] refusing to sync without knowing what is already stored --"
+		error "[$JOB_NAME] the deletion guard is sized from that number."
+		error "[$JOB_NAME] run 'nasbak check' to find out why."
+		return 1
+	fi
 	NB_DEST_OBJECTS=$(printf '%s' "$_boj_before" | awk '{print ($1 ~ /^[0-9]+$/) ? $1 : 0}')
 	_boj_before_bytes=$(printf '%s' "$_boj_before" | awk '{print ($2 ~ /^[0-9]+$/) ? $2 : 0}')
 	info "[$JOB_NAME] currently in S3: $NB_DEST_OBJECTS objects, $(human_bytes "$_boj_before_bytes")"

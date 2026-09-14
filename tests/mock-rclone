@@ -12,6 +12,7 @@ version)
 	exit 0
 	;;
 size)
+	[ -n "${MOCK_FAIL:-}" ] && exit "${MOCK_FAIL}"
 	# Remote paths answer from a fixture; local paths are counted for real.
 	for a in "$@"; do
 		case "$a" in
@@ -28,7 +29,12 @@ lsl)
 	[ -n "${MOCK_LSL_FILE:-}" ] && cat "$MOCK_LSL_FILE"
 	exit 0
 	;;
-sync | copy | copyto | check | delete | cleanup | backend)
+sync)
+	[ -n "${MOCK_FAIL:-}" ] && exit "${MOCK_FAIL}"
+	[ -n "${MOCK_SYNC_FAIL:-}" ] && exit "${MOCK_SYNC_FAIL}"
+	exit 0
+	;;
+copy | copyto | check | delete | cleanup | backend)
 	[ -n "${MOCK_FAIL:-}" ] && exit "${MOCK_FAIL}"
 	exit 0
 	;;
